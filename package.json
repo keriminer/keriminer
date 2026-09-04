@@ -1,0 +1,25 @@
+{
+  "name": "whatsapp-agent-kit",
+  "version": "0.1.0",
+  "description": "Starter kit for building a Claude-powered agent on the WhatsApp Business Cloud API",
+  "license": "MIT",
+  "type": "commonjs",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "dev": "tsx watch src/server.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.1"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.14.9",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  }
+}
