@@ -1,0 +1,11 @@
+node_modules/
+out/
+out-tests/
+dist/
+*.tsbuildinfo
+.DS_Store
+*.log
+
+# Donnees locales generees par l'application au premier lancement
+donnees/
+sauvegardes/
