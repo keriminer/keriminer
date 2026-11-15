@@ -1,19 +1,22 @@
 import { promises as fs } from "node:fs";
 import type { NextRequest } from "next/server";
-import { resolveFile } from "@/lib/store";
+import { currentUser } from "@/lib/auth";
+import { resolveFile, userPrefix } from "@/lib/storage";
 
 const TYPES: Record<string, string> = { jpg: "image/jpeg", png: "image/png", webp: "image/webp", svg: "image/svg+xml" };
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
+  const user = await currentUser();
+  if (!user) return new Response("Unauthorized", { status: 401 });
   const rel = (await ctx.params).path.join("/");
-  const abs = resolveFile(rel);
+  const abs = rel.startsWith(userPrefix(user.id)) ? resolveFile(rel) : null;
   const type = TYPES[rel.split(".").pop() ?? ""];
   if (!abs || !type) return new Response("Not found", { status: 404 });
   try {
     const data = await fs.readFile(abs);
     const headers: Record<string, string> = {
       "Content-Type": type,
-      "Cache-Control": "private, max-age=31536000, immutable",
+      "Cache-Control": "private, max-age=86400",
       "X-Content-Type-Options": "nosniff",
       "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
     };

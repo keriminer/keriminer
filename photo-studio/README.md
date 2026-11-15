@@ -9,11 +9,16 @@ Inspiré du fonctionnement du « Photo Studio » de BukoFlow (analysé via son b
 ```bash
 cd photo-studio
 npm install
-cp .env.example .env.local   # IMAGE_PROVIDER=mock par défaut (aucune clé requise)
-npm run dev                  # http://localhost:3000
+cp .env.example .env.local
+# Renseignez BETTER_AUTH_SECRET (openssl rand -base64 32), le reste a des valeurs par défaut
+npm run dev                  # http://localhost:3000 → page de connexion
 ```
 
-Pour de vraies images : `IMAGE_PROVIDER=gemini` + `GEMINI_API_KEY` dans `.env.local`.
+- **Base de données** : sans `DATABASE_URL`, un Postgres embarqué (PGlite) est créé dans `data/pglite`. Aucune installation n'est nécessaire. Les migrations s'appliquent automatiquement au démarrage.
+- **Production** : `DATABASE_URL=postgres://…` (Supabase, Neon, RDS…). Même schéma, mêmes migrations.
+- **Vraies images** : `IMAGE_PROVIDER=gemini` + `GEMINI_API_KEY`.
+- **Google** (optionnel) : `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`. Le bouton n'apparaît que si les deux sont définis.
+- **Modifier le schéma** : éditez `src/db/schema.ts`, puis `npm run db:generate`.
 
 ## Fonctionnalités
 
@@ -26,13 +31,23 @@ Pour de vraies images : `IMAGE_PROVIDER=gemini` + `GEMINI_API_KEY` dans `.env.lo
 | **Paramètres** | Format 4:5 / 9:16 / 1:1 / 16:9 · 1 à 4 photos · aperçu et copie du brief |
 | **Réglages jumelles** | Couleurs de marque injectées dans tenues et décors · coiffure et maquillage (aucun changement / selon collection / personnalisé) · réinitialisation |
 | **Médiathèque** | Galerie, favoris, visionneuse au clavier, téléchargement, suppression, « Générer dans ce style » |
-| **Crédits** | 1 crédit = 1 photo, réservés à la demande, remboursés automatiquement en cas d'échec |
+| **Comptes** | Inscription et connexion par email + mot de passe (8 caractères min.), Google en option, sessions de 30 jours, limitation des tentatives (5 connexions/min) |
+| **Isolation** | Chaque requête est filtrée par `userId` : photos, médias, jobs et fichiers. Un fichier d'un autre compte renvoie 404, un visiteur non connecté 401 |
+| **RGPD** | Consentement explicite avant tout import de visage · export JSON de toutes les données · suppression du compte en cascade (base + fichiers) |
+| **Crédits** | 20 offerts à l'inscription · débit atomique (verrou de ligne) · remboursement automatique en cas d'échec · journal `credit_ledger` |
 
 ## Architecture
 
 ```
+drizzle/                migrations SQL versionnées
 src/
-  app/api/
+  db/schema.ts          tables Better Auth (user, session, account, verification) + twin_profile, twin_photo, job, media, credit_ledger
+  db/index.ts           Postgres (DATABASE_URL) ou PGlite, migrations au démarrage
+  proxy                 aucun : chaque page et chaque route vérifient la session côté serveur
+  app/login/            connexion / inscription
+  app/api/auth/[...all] Better Auth
+  app/api/account/      DELETE suppression du compte · GET export/ (JSON)
+  app/api/twin/consent  POST consentement RGPD
     catalog/            GET   catalogue (usages, collections, secteurs, formats)
     twin/               GET/PATCH profil + réglages
     twin/photos/        POST/DELETE photos de référence (JPG/PNG/WebP, 10 Mo)
@@ -48,17 +63,20 @@ src/
     prompt.ts           construction du brief (verrou d'identité, réalisme, aucun texte ni logo)
     generation.ts       validation, réservation et remboursement des crédits, file de jobs (3 max en parallèle)
     providers/          gemini.ts (réel) · mock.ts (démo) : interface commune ImageProvider
-    store.ts            base JSON + fichiers locaux, écritures sérialisées et atomiques
+    auth.ts             Better Auth, requireUser(), crédits offerts à l'inscription
+    repo.ts             requêtes base de données, toutes filtrées par userId
+    storage.ts          fichiers sous users/{userId}/ (prochaine étape : S3/R2)
   components/           Studio, TwinWizard, TwinSlots, TwinDrawer, GenerateView, MediaLibrary
 ```
 
-Stack : Next.js 16 (App Router), React 19, Tailwind 4, TypeScript strict, `@google/genai`.
+Stack : Next.js 16 (App Router), React 19, Tailwind 4, TypeScript strict, Better Auth, Drizzle ORM, Postgres / PGlite, `@google/genai`.
 
-## Limites de ce MVP (à traiter avant production)
+## Limites restantes avant production
 
-1. **Mono-utilisateur, sans authentification.** Il faut ajouter Auth (Clerk, Supabase Auth ou Auth.js) et rattacher `profile`, `media` et `jobs` à un `userId`.
-2. **Stockage local.** Il faut remplacer `store.ts` par PostgreSQL (Supabase ou Neon) et un stockage objet (S3 ou R2) avec URL signées. L'interface `read`/`mutate` isole déjà ce changement.
-3. **Jobs en mémoire.** Ils fonctionnent avec `next start` (serveur Node persistant), pas en serverless. Pour Vercel, il faut une file (Inngest, Trigger.dev, QStash). Les jobs interrompus sont remboursés au redémarrage.
-4. **Paiement.** Pas de Stripe pour l'instant : les crédits sont un simple compteur.
-5. **Données biométriques (RGPD).** Les photos de visage sont des données sensibles. Il faut un consentement explicite, une suppression à la demande (la base existe déjà) et une politique de conservation.
-6. **iPhone HEIC.** Les fichiers HEIC sont refusés avec un message explicite. On peut ajouter une conversion côté client (`heic2any`).
+1. ~~Authentification et multi-utilisateur~~ ✅ fait.
+2. **Stockage des fichiers en local.** Il faut passer sur S3 ou R2 avec des URL signées : il suffit de remplacer `storage.ts`, qui est déjà organisé par utilisateur.
+3. **Jobs exécutés dans le processus Node.** L'app doit tourner sur une seule instance (`next start`, VPS, Railway, Render). Pour plusieurs instances ou du serverless, il faut une file de tâches (Inngest, Trigger.dev, pg-boss). La récupération des jobs interrompus suppose aussi une instance unique.
+4. **Pas de paiement.** Prochaine étape : Stripe Checkout, puis un webhook qui crédite `twin_profile.credits` et écrit `purchase` dans `credit_ledger`.
+5. **Pas de vérification d'email ni de « mot de passe oublié ».** Ils sont natifs dans Better Auth mais demandent un service d'envoi d'emails (Resend, Postmark).
+6. **iPhone HEIC refusé**, avec un message explicite. On peut ajouter une conversion côté client.
+7. **`npm audit`** signale 4 alertes « moderate » dans `drizzle-kit`, un outil de développement qui n'est pas embarqué en production.

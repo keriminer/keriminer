@@ -11,7 +11,6 @@ export interface TwinPhoto {
   angle: AngleKey;
   file: string;
   mimeType: string;
-  createdAt: string;
 }
 
 export interface StyleOverride {
@@ -26,7 +25,7 @@ export interface TwinProfile {
   hair: StyleOverride;
   makeup: StyleOverride;
   credits: number;
-  updatedAt: string;
+  consentedAt: Date | null;
 }
 
 export interface Collection {
@@ -60,35 +59,6 @@ export interface GenerationInfo {
   prompt: string;
 }
 
-export interface MediaItem {
-  id: string;
-  file: string;
-  mimeType: string;
-  createdAt: string;
-  favorite: boolean;
-  jobId: string;
-  generation: GenerationInfo;
-}
-
-export type JobStatus = "queued" | "running" | "complete" | "failed";
-
-export interface Job {
-  id: string;
-  status: JobStatus;
-  count: number;
-  produced: string[];
-  error: string | null;
-  createdAt: string;
-  finishedAt: string | null;
-  generation: GenerationInfo;
-}
-
-export interface Database {
-  profile: TwinProfile;
-  media: MediaItem[];
-  jobs: Job[];
-}
-
 export type ApiErrorCode =
   | "invalid_request"
   | "twin_missing"
@@ -98,4 +68,6 @@ export type ApiErrorCode =
   | "provider_error"
   | "file_too_large"
   | "unsupported_file"
-  | "not_found";
+  | "not_found"
+  | "unauthorized"
+  | "consent_required";

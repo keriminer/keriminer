@@ -12,6 +12,8 @@ export interface Catalog {
 export interface ProfilePhoto { id: string; kind: TwinKind; angle: AngleKey; url: string }
 
 export interface Profile {
+  user: { name: string; email: string; image: string | null };
+  consented: boolean;
   photos: ProfilePhoto[];
   primaryColor: string | null;
   secondaryColor: string | null;
@@ -49,6 +51,10 @@ export async function api<T>(url: string, init?: RequestInit & { json?: unknown 
     });
   } catch {
     throw new ApiError("network", "Connexion impossible. Vérifiez votre réseau et réessayez.");
+  }
+  if (res.status === 401) {
+    window.location.href = "/login";
+    throw new ApiError("unauthorized", "Session expirée. Reconnectez-vous.");
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new ApiError(data.error ?? "unknown", data.message ?? "Une erreur est survenue. Réessayez.");

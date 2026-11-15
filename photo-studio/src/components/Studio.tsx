@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import GenerateView, { type GenerateSeed } from "./GenerateView";
+import AccountMenu from "./AccountMenu";
 import MediaLibrary from "./MediaLibrary";
 import TwinDrawer from "./TwinDrawer";
 import TwinWizard from "./TwinWizard";
@@ -106,6 +107,7 @@ export default function Studio() {
                 Mes jumelles
               </button>
             )}
+            <AccountMenu name={profile.user.name} email={profile.user.email} />
           </div>
         </div>
         {!showWizard && <div className="border-t border-line px-4 py-2 sm:hidden">{tabs}</div>}

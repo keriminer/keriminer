@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import TwinSlots from "./TwinSlots";
-import { cx, hasTwin, type Catalog, type Profile } from "./client";
+import { api, cx, hasTwin, type Catalog, type Profile } from "./client";
 
 interface Props {
   catalog: Catalog;
@@ -26,6 +26,23 @@ const TILES = [
 
 export default function TwinWizard({ catalog, profile, onProfile, onDone }: Props) {
   const [step, setStep] = useState(0);
+  const [consent, setConsent] = useState(profile.consented);
+  const [consentBusy, setConsentBusy] = useState(false);
+  const [consentError, setConsentError] = useState<string | null>(null);
+
+  async function acceptAndContinue() {
+    if (profile.consented) return setStep(3);
+    setConsentBusy(true);
+    setConsentError(null);
+    try {
+      onProfile(await api<Profile>("/api/twin/consent", { method: "POST" }));
+      setStep(3);
+    } catch (e) {
+      setConsentError((e as Error).message);
+    } finally {
+      setConsentBusy(false);
+    }
+  }
   const smilingReady = hasTwin(profile, "smiling");
   const neutralCount = profile.photos.filter((p) => p.kind === "neutral").length;
 
@@ -105,9 +122,18 @@ export default function TwinWizard({ catalog, profile, onProfile, onDone }: Prop
               </div>
             </div>
             <p className="mt-4 text-sm text-muted">Le studio choisit automatiquement la bonne jumelle selon la collection.</p>
+            {!profile.consented && (
+              <label className="mt-5 flex cursor-pointer gap-3 rounded-xl border border-line bg-surface-2 p-4 text-sm leading-relaxed">
+                <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} className="mt-1 h-4 w-4 shrink-0 accent-[var(--color-accent)]" />
+                <span>
+                  J&apos;accepte que mes photos de visage soient utilisées uniquement pour générer mes propres images. Je peux les supprimer, exporter mes données ou fermer mon compte à tout moment.
+                </span>
+              </label>
+            )}
+            {consentError && <p className="mt-2 text-sm text-danger">{consentError}</p>}
             <div className="mt-6 flex flex-col gap-2">
-              <button type="button" onClick={() => setStep(3)} className="btn-primary w-full py-3">
-                On les configure
+              <button type="button" onClick={acceptAndContinue} disabled={!consent || consentBusy} className="btn-primary w-full py-3">
+                {consentBusy ? "Un instant…" : "On les configure"}
               </button>
               <button type="button" onClick={() => setStep(1)} className="btn-ghost w-full">
                 Retour

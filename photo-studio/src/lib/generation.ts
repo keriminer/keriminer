@@ -1,20 +1,17 @@
 import { randomUUID } from "node:crypto";
+import { and, count as sqlCount, eq, inArray, sql } from "drizzle-orm";
+import { db, schema } from "@/db";
 import { MAX_PENDING_JOBS, MAX_PHOTOS_PER_JOB, findCollection, twinForEnergy } from "./catalog";
+import { AppError } from "./errors";
 import { buildCollectionPrompt, buildCustomPrompt } from "./prompt";
 import { getProvider, ProviderError, type ReferenceImage } from "./providers";
-import { mutate, read, readFileBase64, saveFile } from "./store";
-import type { ApiErrorCode, AspectRatio, GenerationInfo, Job, TwinKind, TwinProfile } from "./types";
+import { getProfile } from "./repo";
+import { readFileBase64, saveFile } from "./storage";
+import type { AspectRatio, GenerationInfo, TwinKind, TwinProfile } from "./types";
 
-export class AppError extends Error {
-  constructor(
-    public readonly code: ApiErrorCode,
-    message: string,
-    public readonly status = 400,
-    public readonly details?: Record<string, unknown>,
-  ) {
-    super(message);
-  }
-}
+export { AppError };
+
+const { job, media, twinProfile, twinPhoto, creditLedger } = schema;
 
 export interface GenerateRequest {
   mode: "collection" | "custom";
@@ -84,107 +81,96 @@ export function resolveGeneration(req: GenerateRequest, profile: TwinProfile): G
   };
 }
 
-export async function createJob(req: GenerateRequest): Promise<Job> {
+export async function createJob(userId: string, req: GenerateRequest) {
   await recoverStaleJobs();
-  const job = await mutate((db) => {
-    const pending = db.jobs.filter((j) => j.status === "queued" || j.status === "running").length;
+  const profile = await getProfile(userId);
+  const generation = resolveGeneration(req, profile);
+  const id = randomUUID();
+
+  const created = await db.transaction(async (tx) => {
+    const [locked] = await tx.select({ credits: twinProfile.credits }).from(twinProfile).where(eq(twinProfile.userId, userId)).for("update");
+    const [{ pending }] = await tx
+      .select({ pending: sqlCount() })
+      .from(job)
+      .where(and(eq(job.userId, userId), inArray(job.status, ["queued", "running"])));
     if (pending >= MAX_PENDING_JOBS) {
       throw new AppError("too_many_pending_jobs", `${MAX_PENDING_JOBS} générations sont déjà en cours. Patientez quelques instants.`, 429);
     }
-    if (db.profile.credits < req.count) {
-      throw new AppError("not_enough_credits", `Il vous faut ${req.count} crédit(s), il vous en reste ${db.profile.credits}.`, 402, {
-        needed: req.count,
-        available: db.profile.credits,
-      });
+    if (!locked || locked.credits < req.count) {
+      const available = locked?.credits ?? 0;
+      throw new AppError("not_enough_credits", `Il vous faut ${req.count} crédit(s), il vous en reste ${available}.`, 402, { needed: req.count, available });
     }
-    const generation = resolveGeneration(req, db.profile);
-    db.profile.credits -= req.count;
-    const created: Job = {
-      id: randomUUID(),
-      status: "queued",
-      count: req.count,
-      produced: [],
-      error: null,
-      createdAt: new Date().toISOString(),
-      finishedAt: null,
-      generation,
-    };
-    db.jobs.unshift(created);
-    db.jobs = db.jobs.slice(0, 200);
-    return created;
+    await tx.update(twinProfile).set({ credits: sql`${twinProfile.credits} - ${req.count}` }).where(eq(twinProfile.userId, userId));
+    await tx.insert(creditLedger).values({ id: randomUUID(), userId, delta: -req.count, reason: "generation", jobId: id });
+    const [row] = await tx.insert(job).values({ id, userId, status: "queued", count: req.count, generation }).returning();
+    return row;
   });
-  void runJob(job.id);
-  return job;
+
+  void runJob(created.id, userId);
+  return created;
 }
 
-async function referencesFor(twin: TwinKind): Promise<ReferenceImage[]> {
-  const photos = await read((db) => db.profile.photos.filter((p) => p.kind === twin));
+async function referencesFor(userId: string, twin: TwinKind): Promise<ReferenceImage[]> {
+  const photos = await db
+    .select()
+    .from(twinPhoto)
+    .where(and(eq(twinPhoto.userId, userId), eq(twinPhoto.kind, twin)));
   const order = ["front", "right45", "profile", "fullbody"];
   photos.sort((a, b) => order.indexOf(a.angle) - order.indexOf(b.angle));
   return Promise.all(photos.map(async (p) => ({ mimeType: p.mimeType, base64: await readFileBase64(p.file) })));
 }
 
-async function runJob(jobId: string): Promise<void> {
-  const job = await mutate((db) => {
-    const j = db.jobs.find((x) => x.id === jobId);
-    if (j) j.status = "running";
-    return j ? structuredClone(j) : null;
+async function finishJob(jobId: string, userId: string, produced: number, total: number, error: string | null) {
+  await db.transaction(async (tx) => {
+    const missing = total - produced;
+    if (missing > 0) {
+      await tx.update(twinProfile).set({ credits: sql`${twinProfile.credits} + ${missing}` }).where(eq(twinProfile.userId, userId));
+      await tx.insert(creditLedger).values({ id: randomUUID(), userId, delta: missing, reason: "refund", jobId });
+    }
+    await tx
+      .update(job)
+      .set({ status: produced > 0 ? "complete" : "failed", produced, error, finishedAt: new Date() })
+      .where(eq(job.id, jobId));
   });
-  if (!job) return;
+}
 
+async function runJob(jobId: string, userId: string): Promise<void> {
+  const [row] = await db.update(job).set({ status: "running" }).where(eq(job.id, jobId)).returning();
+  if (!row) return;
+
+  let produced = 0;
   let lastError: ProviderError | null = null;
   try {
     const provider = getProvider();
-    const references = await referencesFor(job.generation.twin);
-    for (let i = 0; i < job.count; i++) {
+    const references = await referencesFor(userId, row.generation.twin);
+    for (let i = 0; i < row.count; i++) {
       try {
-        const img = await provider.generate({ prompt: job.generation.prompt, references, aspectRatio: job.generation.aspectRatio });
-        const file = await saveFile("media", img.data, img.mimeType);
-        await mutate((db) => {
-          const mediaId = randomUUID();
-          db.media.unshift({
-            id: mediaId,
-            file,
-            mimeType: img.mimeType,
-            createdAt: new Date().toISOString(),
-            favorite: false,
-            jobId,
-            generation: job.generation,
-          });
-          db.jobs.find((x) => x.id === jobId)?.produced.push(mediaId);
-        });
+        const img = await provider.generate({ prompt: row.generation.prompt, references, aspectRatio: row.generation.aspectRatio });
+        const file = await saveFile(userId, "media", img.data, img.mimeType);
+        await db.insert(media).values({ id: randomUUID(), userId, jobId, file, mimeType: img.mimeType, generation: row.generation });
+        produced++;
+        await db.update(job).set({ produced }).where(eq(job.id, jobId));
       } catch (err) {
         lastError = err instanceof ProviderError ? err : new ProviderError(String(err), "provider_error");
-        console.error(`[job ${jobId}] image ${i + 1}/${job.count} :`, lastError.message);
+        console.error(`[job ${jobId}] image ${i + 1}/${row.count} :`, lastError.message);
       }
     }
   } catch (err) {
     lastError = err instanceof ProviderError ? err : new ProviderError(String(err), "provider_error");
   }
-
-  await mutate((db) => {
-    const j = db.jobs.find((x) => x.id === jobId);
-    if (!j) return;
-    const missing = j.count - j.produced.length;
-    db.profile.credits += missing;
-    j.status = j.produced.length > 0 ? "complete" : "failed";
-    j.error = lastError ? `${lastError.code}: ${lastError.message}` : null;
-    j.finishedAt = new Date().toISOString();
-  });
+  await finishJob(jobId, userId, produced, row.count, lastError ? `${lastError.code}: ${lastError.message}` : null);
 }
 
-let recovered = false;
-async function recoverStaleJobs(): Promise<void> {
-  if (recovered) return;
-  recovered = true;
-  await mutate((db) => {
-    for (const j of db.jobs) {
-      if (j.status === "queued" || j.status === "running") {
-        db.profile.credits += j.count - j.produced.length;
-        j.status = j.produced.length > 0 ? "complete" : "failed";
-        j.error = "provider_error: interrompu par un redémarrage du serveur";
-        j.finishedAt = new Date().toISOString();
-      }
+let recovered: Promise<void> | null = null;
+function recoverStaleJobs(): Promise<void> {
+  recovered ??= (async () => {
+    const stale = await db
+      .select({ id: job.id, userId: job.userId, count: job.count, produced: job.produced })
+      .from(job)
+      .where(inArray(job.status, ["queued", "running"]));
+    for (const j of stale) {
+      await finishJob(j.id, j.userId, j.produced, j.count, "provider_error: interrompu par un redémarrage du serveur");
     }
-  });
+  })();
+  return recovered;
 }

@@ -1,14 +1,12 @@
 import type { NextRequest } from "next/server";
-import { handleError, ok, profileView } from "@/lib/api";
-import { AppError } from "@/lib/generation";
-import { mutate, read } from "@/lib/store";
+import { ok, profileView, withUser } from "@/lib/api";
+import { AppError } from "@/lib/errors";
+import { getProfile, updateSettings } from "@/lib/repo";
 import type { StyleOverride } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
-  return ok(profileView(await read((db) => db.profile)));
-}
+export const GET = withUser(async (user) => ok(profileView(await getProfile(user.id), user)));
 
 function parseColor(v: unknown): string | null {
   if (v === null || v === undefined || v === "") return null;
@@ -27,21 +25,13 @@ function parseOverride(v: unknown, label: string): StyleOverride {
   throw new AppError("invalid_request", `${label} : option invalide.`);
 }
 
-export async function PATCH(req: NextRequest) {
-  try {
-    const body = (await req.json()) as Record<string, unknown>;
-    const update = {
-      primaryColor: parseColor(body.primaryColor),
-      secondaryColor: parseColor(body.secondaryColor),
-      hair: parseOverride(body.hair, "Coiffure"),
-      makeup: parseOverride(body.makeup, "Maquillage"),
-    };
-    const profile = await mutate((db) => {
-      Object.assign(db.profile, update);
-      return structuredClone(db.profile);
-    });
-    return ok(profileView(profile));
-  } catch (err) {
-    return handleError(err);
-  }
-}
+export const PATCH = withUser(async (user, req: NextRequest) => {
+  const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+  await updateSettings(user.id, {
+    primaryColor: parseColor(body.primaryColor),
+    secondaryColor: parseColor(body.secondaryColor),
+    hair: parseOverride(body.hair, "Coiffure"),
+    makeup: parseOverride(body.makeup, "Maquillage"),
+  });
+  return ok(profileView(await getProfile(user.id), user));
+});

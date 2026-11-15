@@ -1,9 +1,6 @@
-import { mediaView, ok } from "@/lib/api";
-import { read } from "@/lib/store";
+import { mediaView, ok, withUser } from "@/lib/api";
+import { listMedia } from "@/lib/repo";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
-  const media = await read((db) => db.media);
-  return ok({ media: media.map(mediaView) });
-}
+export const GET = withUser(async (user) => ok({ media: (await listMedia(user.id)).map(mediaView) }));

@@ -1,12 +1,8 @@
 import type { NextRequest } from "next/server";
-import { handleError, jobView, ok } from "@/lib/api";
+import { jobView, ok, withUser } from "@/lib/api";
 import { createJob, parseGenerateRequest } from "@/lib/generation";
 
-export async function POST(req: NextRequest) {
-  try {
-    const job = await createJob(parseGenerateRequest(await req.json()));
-    return ok(jobView(job), 202);
-  } catch (err) {
-    return handleError(err);
-  }
-}
+export const POST = withUser(async (user, req: NextRequest) => {
+  const job = await createJob(user.id, parseGenerateRequest(await req.json().catch(() => null)));
+  return ok(jobView(job), 202);
+});
