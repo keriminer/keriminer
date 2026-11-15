@@ -38,10 +38,26 @@ function create(): DbState {
   };
 }
 
-const state = (g.__twinDb ??= create());
-state.ready.catch((err) => console.error("[db] échec des migrations :", err));
+/** Ouverture paresseuse : rien n'est ouvert à l'import (évite que les workers du build ouvrent PGlite en parallèle). */
+function state(): DbState {
+  if (!g.__twinDb) {
+    g.__twinDb = create();
+    g.__twinDb.ready.catch((err) => console.error("[db] échec des migrations :", err));
+  }
+  return g.__twinDb;
+}
 
-export const db = state.db;
-export const dbReady = state.ready;
-export const dbDriver = state.driver;
+export const db = new Proxy({} as DB, {
+  get(_target, prop) {
+    const real = state().db as unknown as Record<string | symbol, unknown>;
+    const value = real[prop];
+    return typeof value === "function" ? (value as (...a: unknown[]) => unknown).bind(real) : value;
+  },
+});
+
+export const dbReady: PromiseLike<void> = {
+  then: (onFulfilled, onRejected) => state().ready.then(onFulfilled, onRejected),
+};
+
+export const dbDriver = () => state().driver;
 export { schema };

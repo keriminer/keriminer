@@ -372,7 +372,14 @@ export default function GenerateView({ catalog, profile, seed, onCredits, onMedi
               </button>
             </div>
             {error && (
-              <p className={cx("rounded-xl px-3 py-2 text-sm", ERROR_TONE[error.code] === "warn" ? "bg-warn-soft text-warn" : "bg-danger/10 text-danger")}>{error.text}</p>
+              <p className={cx("rounded-xl px-3 py-2 text-sm", ERROR_TONE[error.code] === "warn" ? "bg-warn-soft text-warn" : "bg-danger/10 text-danger")}>
+                {error.text}
+                {error.code === "not_enough_credits" && (
+                  <a href="/billing" className="ml-1 font-semibold underline">
+                    Recharger →
+                  </a>
+                )}
+              </p>
             )}
           </div>
         )}

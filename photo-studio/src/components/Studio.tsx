@@ -99,9 +99,10 @@ export default function Studio() {
           </div>
           <div className="flex shrink-0 items-center gap-2">
             {profile.provider === "mock" && <span className="hidden rounded-full bg-warn-soft px-2.5 py-1 text-xs font-semibold text-warn sm:inline">Mode démo</span>}
-            <span className="rounded-full bg-surface-2 px-3 py-1.5 text-xs font-semibold" title="1 crédit = 1 photo">
+            <a href="/billing" className="rounded-full bg-surface-2 px-3 py-1.5 text-xs font-semibold transition hover:bg-accent-soft" title="Recharger mes crédits">
               {profile.credits}<span className="hidden sm:inline"> crédit{profile.credits > 1 ? "s" : ""}</span><span className="sm:hidden"> cr.</span>
-            </span>
+              <span className="ml-1 text-accent">+</span>
+            </a>
             {!showWizard && (
               <button type="button" onClick={() => setDrawer(true)} className="btn-ghost btn-sm">
                 Mes jumelles

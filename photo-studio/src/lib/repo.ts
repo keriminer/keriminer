@@ -94,7 +94,8 @@ export async function exportUserData(userId: string) {
   const jobs = await db.select().from(job).where(eq(job.userId, userId)).orderBy(desc(job.createdAt));
   const items = await listMedia(userId, 10_000);
   const ledger = await db.select().from(schema.creditLedger).where(eq(schema.creditLedger.userId, userId)).orderBy(desc(schema.creditLedger.createdAt));
-  return { user: u, profile, jobs, media: items, creditLedger: ledger, exportedAt: new Date().toISOString() };
+  const orders = await db.select().from(schema.paymentOrder).where(eq(schema.paymentOrder.userId, userId)).orderBy(desc(schema.paymentOrder.createdAt));
+  return { user: u, profile, jobs, media: items, creditLedger: ledger, paymentOrders: orders, exportedAt: new Date().toISOString() };
 }
 
 export async function deleteAccount(userId: string): Promise<void> {

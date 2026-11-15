@@ -160,3 +160,26 @@ export const userRelations = relations(user, ({ one, many }) => ({
   photos: many(twinPhoto),
   media: many(media),
 }));
+
+export const paymentOrder = pgTable(
+  "payment_order",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    provider: text("provider", { enum: ["paydunya", "stripe", "mock"] }).notNull(),
+    packKey: text("pack_key").notNull(),
+    credits: integer("credits").notNull(),
+    amount: integer("amount").notNull(),
+    currency: text("currency").notNull(),
+    status: text("status", { enum: ["pending", "paid", "failed", "cancelled"] }).notNull().default("pending"),
+    providerRef: text("provider_ref"),
+    paymentMethod: text("payment_method"),
+    failureReason: text("failure_reason"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    paidAt: timestamp("paid_at", { withTimezone: true }),
+  },
+  (t) => [index("payment_order_user_idx").on(t.userId, t.createdAt), uniqueIndex("payment_order_provider_ref_uq").on(t.provider, t.providerRef)],
+);
